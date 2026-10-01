@@ -1,10 +1,10 @@
 ---
 layout: default
-title: CPU 使用率監控與異常程序追蹤指南
+title: Linux CPU 使用率監控與異常程序追蹤指南
 permalink: /cpu-watch/
 ---
 
-# CPU 使用率監控與異常程序追蹤指南
+# Linux CPU 使用率監控與異常程序追蹤指南
 
 <p class="byline">2026-10-01 ・ 維運紀錄</p>
 
