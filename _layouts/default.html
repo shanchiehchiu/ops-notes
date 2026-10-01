@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0a0c10">
+  <title>{{ page.title }} | {{ site.description }}</title>
+  <meta name="description" content="{{ site.description }}">
+  <link rel="stylesheet" href="{{ '/assets/css/style.css' | relative_url }}">
+</head>
+<body>
+  <div class="topbar">
+    <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+    <span class="path">~/ops-notes/ssh-fail2ban</span>
+  </div>
+  <main class="wrap">
+    {{ content }}
+  </main>
+  <footer class="wrap foot">
+    <a href="https://github.com/shanchiehchiu/ssh-fail2ban-notes">在 GitHub 查看原始碼</a>
+  </footer>
+</body>
+</html>

@@ -1,4 +1,3 @@
 title: 主機卡頓排查紀錄：SSH 暴力登入與 Fail2ban 防護
 description: 從 CPU 尖峰追到 SSH 外部攻擊，並以 Fail2ban 自動封鎖的實際維運紀錄
 lang: zh-Hant
-theme: jekyll-theme-minimal
