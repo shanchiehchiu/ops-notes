@@ -124,17 +124,22 @@ sudo fail2ban-client status sshd
 實際輸出類似：
 
 ```text
-Currently failed: 1
-Total failed: 78
-Currently banned: 5
-Total banned: 5
-Banned IP list:
-2.57.121.112
-45.148.10.151
-125.129.127.204
-137.184.79.87
-62.60.130.253
+Status for the jail: sshd
+|- Filter
+|  |- Currently failed: 1
+|  |- Total failed: 78
+|  `- Journal matches: _SYSTEMD_UNIT=sshd.service + _COMM=sshd
+`- Actions
+   |- Currently banned: 5
+   |- Total banned: 5
+   `- Banned IP list: 2.57.121.112 45.148.10.151 125.129.127.204 137.184.79.87 62.60.130.253
 ```
+
+`Filter` 區塊是偵測端的統計，`Actions` 區塊則是實際封鎖的結果：
+
+- `Currently failed`／`Total failed`：目前仍在計數視窗內、以及累計的登入失敗次數。
+- `Currently banned`／`Total banned`：目前被封鎖、以及累計封鎖的 IP 數。
+- `Banned IP list`：目前被封鎖的 IP，以空白分隔。
 
 啟用後，Fail2ban 已開始自動封鎖反覆嘗試登入的來源，前面紀錄中出現的 `125.129.127.204`、`137.184.79.87` 也都在封鎖清單內。
 
