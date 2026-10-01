@@ -11,7 +11,7 @@ title: 維運筆記
   <li>
     <a href="{{ '/ssh-fail2ban/' | relative_url }}">
       <span class="post-date">2026-10-01</span>
-      <span class="post-title">主機卡頓排查紀錄：SSH 暴力登入與 Fail2ban 防護</span>
+      <span class="post-title">SSH 暴力登入與 Fail2ban 防護</span>
       <span class="post-desc">從 CPU 尖峰追到 SSH 外部攻擊，並以 Fail2ban 自動封鎖。</span>
     </a>
   </li>

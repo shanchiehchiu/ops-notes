@@ -1,10 +1,10 @@
 ---
 layout: default
-title: 主機卡頓排查紀錄：SSH 暴力登入與 Fail2ban 防護
+title: SSH 暴力登入與 Fail2ban 防護
 permalink: /ssh-fail2ban/
 ---
 
-# 主機卡頓排查紀錄：SSH 暴力登入與 Fail2ban 防護
+# SSH 暴力登入與 Fail2ban 防護
 
 <p class="byline">2026-10-01 ・ 維運紀錄</p>
 

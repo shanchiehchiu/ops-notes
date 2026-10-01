@@ -170,7 +170,7 @@ PID      PPID USER    COMMAND       %CPU %MEM
 43036    ...  mysql   mariadbd       0.1  9.2
 ```
 
-這次就是在 CPU 28.4% 時抓到：主要來源是 `sshd`，PHP-FPM 與 MariaDB 的使用率都很低。後續追查見[《主機卡頓排查紀錄》]({{ '/ssh-fail2ban/' | relative_url }})。
+這次就是在 CPU 28.4% 時抓到：主要來源是 `sshd`，PHP-FPM 與 MariaDB 的使用率都很低。後續追查見[《SSH 暴力登入與 Fail2ban 防護》]({{ '/ssh-fail2ban/' | relative_url }})。
 
 同樣的方式，未來若是 `php-fpm8.1`、`mariadbd`、`redis-server` 或其他程序吃 CPU，也都會被記錄下來。
 
