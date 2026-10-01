@@ -12,10 +12,13 @@
 </head>
 <body>
   <main class="wrap">
+    {% if page.url != '/' %}
+    <a class="back" href="{{ '/' | relative_url }}">← 回到維運筆記</a>
+    {% endif %}
     {{ content }}
   </main>
   <footer class="wrap foot">
-    <a href="https://github.com/shanchiehchiu/ssh-fail2ban-notes">在 GitHub 查看原始碼</a>
+    <a href="https://github.com/shanchiehchiu/ops-notes">在 GitHub 查看原始碼</a>
   </footer>
 </body>
 </html>
