@@ -19,7 +19,7 @@ title: 維運筆記
     <a href="{{ '/cpu-watch/' | relative_url }}">
       <span class="post-date">2026-10-01</span>
       <span class="post-title">Linux CPU 使用率監控與異常程序追蹤指南</span>
-      <span class="post-desc">用背景腳本在 CPU 升高時，自動保存尖峰當下與發生前的程序快照。</span>
+      <span class="post-desc">輕量背景腳本：CPU 或 steal 升高時，才自動保存程序取樣與系統狀態。</span>
     </a>
   </li>
 </ul>

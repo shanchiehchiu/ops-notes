@@ -154,6 +154,29 @@ pre code {
 .highlight .m, .highlight .mi { color: #c792ff; }
 .highlight .err { color: inherit; background: none; }
 
+table {
+  display: block;
+  width: 100%;
+  margin: 1.2em 0;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 15px;
+  line-height: 1.6;
+}
+th, td {
+  padding: 10px 14px;
+  text-align: left;
+  vertical-align: top;
+  border: 1px solid var(--border);
+}
+th {
+  background: var(--panel);
+  color: var(--cyan);
+  white-space: nowrap;
+}
+tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.025); }
+td code { white-space: nowrap; }
+
 .foot {
   padding-top: 20px;
   padding-bottom: 50px;

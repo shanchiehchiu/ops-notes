@@ -6,28 +6,52 @@ permalink: /cpu-watch/
 
 # Linux CPU 使用率監控與異常程序追蹤指南
 
-<p class="byline">2026-10-01 ・ 2026-10-02 更新（V2）</p>
+<p class="byline">2026-10-01 ・ 2026-10-02 更新（V3.1）</p>
 
 ## 背景
 
 主機偶爾會出現短暫的 CPU 尖峰，但一般監控圖只能看到「CPU 有升高」，無法得知當下是哪個程序造成的。
 
-因此我們建立一個 CPU Watcher（V2），做到：
+因此我們建立一個 CPU Watcher（V3.1 輕量版），核心做法是：
 
-- 每 1 秒保存一次程序（process）快照。
-- 每 10 秒計算一次整體 CPU 使用率。
-- CPU 使用率達 15% 以上時，自動保存異常現場。
-- 同時保存尖峰發生前的程序快照。
+> 平常只讀 `/proc/stat`，幾乎不掃描程序；只有 CPU ≥ 15% 或 steal ≥ 10% 時，才抓一次詳細的程序資訊。
+
+具體來說：
+
+- 每 2 秒讀一次 `/proc/stat`，計算整體 CPU 使用率，並拆解成 user、system、iowait、irq、softirq、steal。
+- CPU ≥ 15% 或 steal ≥ 10% 時，自動保存異常現場。
+- 觸發後有 10 秒冷卻時間，避免尖峰期間反覆執行重型檢查。
 - 同時記錄 Load、記憶體、PHP-FPM、連線與 MySQL 狀態。
 - 每 10 分鐘留下一筆存活紀錄，確認監控仍在執行。
 
-### V2 改進了什麼
+## 版本演進
 
-初版每 10 秒檢查一次，只在偵測到 CPU 偏高的那一刻才記錄，看不到尖峰「之前」發生了什麼；如果造成尖峰的程序很短暫，偵測到時它可能已經結束。
+| 版本 | 做法 | 代價 |
+|---|---|---|
+| 初版 | 每 10 秒算一次 CPU，達標才記錄 | 只看得到偵測當下，看不到尖峰之前 |
+| V2 | 每秒用 `ps` 保存程序快照，尖峰時一併寫出前約 10 秒 | 每秒執行一次 `ps` |
+| V3 | 每秒掃描全部 `/proc/PID/stat` | Watcher 自己實測佔 5～12% CPU，已棄用 |
+| **V3.1** | 平常只讀 `/proc/stat`，達標才取樣一次 | **沒有尖峰前的程序快照** |
 
-V2 改為持續保存近期的程序快照，偵測到尖峰時，會把前面約 10 筆快照（約 10 秒）一起寫進紀錄，方便回頭看是誰在尖峰前就開始吃 CPU。
+V3.1 用「不保存尖峰前快照」換取極低的監控負擔，並且新增了 steal 的偵測（見下方〈判讀〉）。如果你更需要看到尖峰「之前」的程序，可以回頭參考 V2 的做法；這個站台的 git 歷史裡保留了 V2 的腳本。
 
-## 建立監控腳本
+## 事前準備
+
+### 安裝 pidstat
+
+觸發時的程序取樣使用 `pidstat`，它在 `sysstat` 套件裡，多數系統預設沒有安裝：
+
+```bash
+sudo apt install sysstat -y
+```
+
+確認：
+
+```bash
+pidstat -V
+```
+
+沒有安裝也能運作，腳本會退回使用 `ps`，但 `ps` 的 `%CPU` 是程序「從啟動到現在」的平均值，不夠準確（見〈判讀〉）。
 
 ### 如果已經在跑舊版
 
@@ -37,11 +61,25 @@ V2 改為持續保存近期的程序快照，偵測到尖峰時，會把前面�
 pkill -f cpu-watch.sh
 ```
 
-Bash 是邊讀邊執行腳本的，在執行中直接覆蓋檔案，可能讓正在跑的舊程序讀到錯亂的內容。
+確認已停止：
 
-### 建立 V2 腳本
+```bash
+pgrep -af cpu-watch.sh
+```
 
-執行：
+沒有輸出就代表已停止。
+
+Bash 是邊讀邊執行腳本的，在執行中直接覆蓋檔案，可能讓正在跑的舊程序讀到錯亂的內容，所以務必先停再蓋。
+
+V2 留下的快照資料夾已經用不到，可以順手刪除：
+
+```bash
+rm -rf ~/perf-logs/cpu-snapshots
+```
+
+## 建立監控腳本
+
+直接整段貼上：
 
 ```bash
 cat > ~/cpu-watch.sh <<'EOF'
@@ -49,112 +87,200 @@ cat > ~/cpu-watch.sh <<'EOF'
 
 LOG_DIR="$HOME/perf-logs"
 LOG="$LOG_DIR/cpu-over-15.log"
-SNAPSHOT_DIR="$LOG_DIR/cpu-snapshots"
 
-mkdir -p "$LOG_DIR" "$SNAPSHOT_DIR"
+CPU_THRESHOLD=15
+STEAL_THRESHOLD=10
+SAMPLE_SECONDS=2
+ALIVE_SECONDS=600
+DETAIL_COOLDOWN=10
 
-echo "===== CPU WATCH V2 START $(date) =====" >> "$LOG"
+mkdir -p "$LOG_DIR"
 
-last_total=0
-last_idle=0
-last_check=$(date +%s)
-last_alive=$(date +%s)
+echo "===== CPU WATCH V3.1 START $(date) =====" >> "$LOG"
 
-take_snapshot() {
-    local now
-    now=$(date +%s)
+read_cpu() {
+    read -r _ user nice system idle iowait irq softirq steal guest guest_nice < /proc/stat
 
-    {
-        echo "TIME: $(date)"
-        ps -eo pid,ppid,user,comm,%cpu,%mem,etime --sort=-%cpu | head -30
-    } > "$SNAPSHOT_DIR/$now.log"
+    CPU_USER=$((user + nice))
+    CPU_SYSTEM=$system
+    CPU_IDLE=$idle
+    CPU_IOWAIT=$iowait
+    CPU_IRQ=$irq
+    CPU_SOFTIRQ=$softirq
+    CPU_STEAL=$steal
 
-    # 只保留最近約 1～2 分鐘的快照
-    find "$SNAPSHOT_DIR" -type f -name '*.log' -mmin +1 -delete
+    CPU_TOTAL=$((user + nice + system + idle + iowait + irq + softirq + steal))
 }
 
+read_cpu
+
+prev_total=$CPU_TOTAL
+prev_user=$CPU_USER
+prev_system=$CPU_SYSTEM
+prev_idle=$CPU_IDLE
+prev_iowait=$CPU_IOWAIT
+prev_irq=$CPU_IRQ
+prev_softirq=$CPU_SOFTIRQ
+prev_steal=$CPU_STEAL
+
+last_alive=$(date +%s)
+last_detail=0
+
 while true; do
-    take_snapshot
+    sleep "$SAMPLE_SECONDS"
 
-    now=$(date +%s)
+    read_cpu
 
-    # 每 10 秒計算一次整體 CPU
-    if [ $((now - last_check)) -ge 10 ]; then
-        read -r cpu user nice system idle iowait irq softirq steal rest < /proc/stat
+    diff_total=$((CPU_TOTAL - prev_total))
+    diff_user=$((CPU_USER - prev_user))
+    diff_system=$((CPU_SYSTEM - prev_system))
+    diff_idle=$((CPU_IDLE - prev_idle))
+    diff_iowait=$((CPU_IOWAIT - prev_iowait))
+    diff_irq=$((CPU_IRQ - prev_irq))
+    diff_softirq=$((CPU_SOFTIRQ - prev_softirq))
+    diff_steal=$((CPU_STEAL - prev_steal))
 
-        total=$((user + nice + system + idle + iowait + irq + softirq + steal))
-        idle_all=$((idle + iowait))
+    if [ "$diff_total" -gt 0 ]; then
 
-        if [ "$last_total" -ne 0 ]; then
-            diff_total=$((total - last_total))
-            diff_idle=$((idle_all - last_idle))
+        cpu_used=$(awk -v t="$diff_total" \
+            -v idle="$diff_idle" \
+            -v wait="$diff_iowait" \
+            'BEGIN { printf "%.1f", (t-idle-wait)*100/t }')
 
-            if [ "$diff_total" -gt 0 ]; then
-                cpu_used=$(awk -v t="$diff_total" -v i="$diff_idle" \
-                    'BEGIN { printf "%.1f", (t-i)*100/t }')
+        cpu_user=$(awk -v t="$diff_total" -v v="$diff_user" \
+            'BEGIN { printf "%.1f", v*100/t }')
 
-                # 每 10 分鐘留下存活紀錄
-                if [ $((now - last_alive)) -ge 600 ]; then
-                    echo "===== CPU WATCH ALIVE $(date) CPU=${cpu_used}% =====" >> "$LOG"
-                    last_alive=$now
-                fi
+        cpu_system=$(awk -v t="$diff_total" -v v="$diff_system" \
+            'BEGIN { printf "%.1f", v*100/t }')
 
-                # CPU >= 15% 記錄詳細資料
-                if awk -v c="$cpu_used" 'BEGIN {exit !(c >= 15)}'; then
-                    {
-                        echo "=================================================="
-                        echo "TIME: $(date)"
-                        echo "CPU: ${cpu_used}%"
-                        echo
+        cpu_iowait=$(awk -v t="$diff_total" -v v="$diff_iowait" \
+            'BEGIN { printf "%.1f", v*100/t }')
 
-                        echo "===== PROCESS SNAPSHOTS BEFORE SPIKE ====="
-                        for f in $(find "$SNAPSHOT_DIR" -type f -name '*.log' | sort | tail -10); do
-                            echo
-                            echo "--- $f ---"
-                            cat "$f"
-                        done
-                        echo
+        cpu_irq=$(awk -v t="$diff_total" -v v="$diff_irq" \
+            'BEGIN { printf "%.1f", v*100/t }')
 
-                        echo "===== CURRENT TOP PROCESSES ====="
-                        ps -eo pid,ppid,user,comm,%cpu,%mem,etime --sort=-%cpu | head -30
-                        echo
+        cpu_softirq=$(awk -v t="$diff_total" -v v="$diff_softirq" \
+            'BEGIN { printf "%.1f", v*100/t }')
 
-                        echo "===== LOAD ====="
-                        uptime
-                        echo
+        cpu_steal=$(awk -v t="$diff_total" -v v="$diff_steal" \
+            'BEGIN { printf "%.1f", v*100/t }')
 
-                        echo "===== MEMORY ====="
-                        free -h
-                        echo
+        now=$(date +%s)
 
-                        echo "===== PHP-FPM ====="
-                        systemctl status php8.1-fpm --no-pager | head -25
-                        echo
-
-                        echo "===== CONNECTION SUMMARY ====="
-                        ss -s
-                        echo
-
-                        echo "===== MYSQL PROCESS ====="
-                        ps -eo pid,user,comm,%cpu,%mem,etime --sort=-%cpu \
-                            | grep -E 'mysqld|mariadbd' | head -10
-                        echo
-                    } >> "$LOG" 2>&1
-                fi
-            fi
+        # 每 10 分鐘留下存活紀錄
+        if [ $((now - last_alive)) -ge "$ALIVE_SECONDS" ]; then
+            echo "===== CPU WATCH V3.1 ALIVE $(date) CPU=${cpu_used}% STEAL=${cpu_steal}% =====" >> "$LOG"
+            last_alive=$now
         fi
 
-        last_total=$total
-        last_idle=$idle_all
-        last_check=$now
+        cpu_trigger=0
+        steal_trigger=0
+
+        if awk -v c="$cpu_used" -v t="$CPU_THRESHOLD" \
+            'BEGIN { exit !(c >= t) }'; then
+            cpu_trigger=1
+        fi
+
+        if awk -v c="$cpu_steal" -v t="$STEAL_THRESHOLD" \
+            'BEGIN { exit !(c >= t) }'; then
+            steal_trigger=1
+        fi
+
+        # 避免尖峰期間每 2 秒都跑重型詳細檢查
+        if { [ "$cpu_trigger" -eq 1 ] || [ "$steal_trigger" -eq 1 ]; } \
+            && [ $((now - last_detail)) -ge "$DETAIL_COOLDOWN" ]; then
+
+            {
+                echo "=================================================="
+                echo "TIME: $(date)"
+                echo "CPU: ${cpu_used}%"
+                echo
+
+                echo "===== TRIGGER ====="
+
+                if [ "$cpu_trigger" -eq 1 ]; then
+                    echo "CPU >= ${CPU_THRESHOLD}%"
+                fi
+
+                if [ "$steal_trigger" -eq 1 ]; then
+                    echo "STEAL >= ${STEAL_THRESHOLD}%"
+                fi
+
+                echo
+                echo "===== CPU BREAKDOWN ====="
+                echo "user:     ${cpu_user}%"
+                echo "system:   ${cpu_system}%"
+                echo "iowait:   ${cpu_iowait}%"
+                echo "irq:      ${cpu_irq}%"
+                echo "softirq:  ${cpu_softirq}%"
+                echo "steal:    ${cpu_steal}%"
+                echo
+
+                echo "===== PROCESS CPU SAMPLE ====="
+
+                if command -v pidstat >/dev/null 2>&1; then
+                    pidstat -u -p ALL 1 1
+                else
+                    echo "pidstat not found; fallback to ps"
+                    ps -eo pid,ppid,user,comm,%cpu,%mem,etime \
+                        --sort=-%cpu | head -30
+                fi
+
+                echo
+                echo "===== LOAD ====="
+                uptime
+                echo
+
+                echo "===== MEMORY ====="
+                free -h
+                echo
+
+                echo "===== PHP-FPM ====="
+                systemctl status php8.1-fpm --no-pager | head -20
+                echo
+
+                echo "===== CONNECTION SUMMARY ====="
+                ss -s
+                echo
+
+                echo "===== MYSQL ====="
+                ps -eo pid,user,comm,%cpu,%mem,etime \
+                    --sort=-%cpu \
+                    | grep -E 'mysqld|mariadbd' \
+                    | head -10
+
+                echo
+            } >> "$LOG" 2>&1
+
+            last_detail=$now
+        fi
     fi
 
-    sleep 1
+    prev_total=$CPU_TOTAL
+    prev_user=$CPU_USER
+    prev_system=$CPU_SYSTEM
+    prev_idle=$CPU_IDLE
+    prev_iowait=$CPU_IOWAIT
+    prev_irq=$CPU_IRQ
+    prev_softirq=$CPU_SOFTIRQ
+    prev_steal=$CPU_STEAL
 done
 EOF
 ```
 
-這個版本直接讀取 `/proc/stat` 來計算 CPU 使用率，不依賴 `top` 的輸出。早期用 `top` 的版本會因為欄位抓錯，而誤判成 `CPU: 100%`。
+### 可調整的參數
+
+腳本開頭的變數可以依主機調整：
+
+| 變數 | 預設 | 說明 |
+|---|---|---|
+| `CPU_THRESHOLD` | 15 | 整體 CPU 達此百分比就觸發 |
+| `STEAL_THRESHOLD` | 10 | steal 達此百分比就觸發 |
+| `SAMPLE_SECONDS` | 2 | 讀取 `/proc/stat` 的間隔（秒） |
+| `ALIVE_SECONDS` | 600 | 存活紀錄的間隔（秒） |
+| `DETAIL_COOLDOWN` | 10 | 兩次詳細紀錄之間至少相隔的秒數 |
+
+另外，腳本裡寫死了 `php8.1-fpm`，如果主機上的 PHP 版本不同，請改成對應的服務名稱。
 
 ## 加上執行權限
 
@@ -184,73 +310,95 @@ pgrep -af cpu-watch.sh
 
 ## 紀錄位置
 
-異常紀錄會寫入：
+所有紀錄都寫入同一個檔案：
 
 ```text
 ~/perf-logs/cpu-over-15.log
 ```
 
-每秒一次的程序快照則放在：
-
-```text
-~/perf-logs/cpu-snapshots/
-```
-
-快照只保留最近約 1～2 分鐘，舊的會自動刪除，不會持續佔用硬碟。
-
 啟動時，紀錄檔裡會先出現：
 
 ```text
-===== CPU WATCH V2 START Thu Oct 1 13:00:00 UTC 2026 =====
+===== CPU WATCH V3.1 START Fri Oct 2 ... UTC 2026 =====
 ```
 
-之後每 10 分鐘會寫一筆：
+之後每 10 分鐘會寫一筆，同時帶出當下的 CPU 與 steal：
 
 ```text
-===== CPU WATCH ALIVE Thu Oct 1 13:10:00 UTC 2026 CPU=2.7% =====
+===== CPU WATCH V3.1 ALIVE ... CPU=1.4% STEAL=0.0% =====
 ```
 
 看到這行，代表監控仍在正常執行。
 
-## CPU 超過 15% 時
+## 觸發時的紀錄
 
-只要 CPU 使用率達 15% 以上，就會自動保存異常現場。每一筆紀錄依序包含：
+只要 CPU ≥ 15% 或 steal ≥ 10%，就會自動保存異常現場。每一筆紀錄依序包含：
 
 1. 時間與當下的 CPU 使用率。
-2. `PROCESS SNAPSHOTS BEFORE SPIKE`：尖峰發生前的程序快照（最近 10 筆）。
-3. `CURRENT TOP PROCESSES`：偵測到尖峰當下，CPU 使用率最高的程序。
-4. Load、記憶體、PHP-FPM 狀態、連線摘要與 MySQL 程序。
+2. `TRIGGER`：是哪個條件觸發的（CPU、steal，或兩者）。
+3. `CPU BREAKDOWN`：CPU 使用率的細項拆解。
+4. `PROCESS CPU SAMPLE`：1 秒內各程序實際的 CPU 使用率。
+5. Load、記憶體、PHP-FPM 狀態、連線摘要與 MySQL 程序。
 
-例如：
+例如 steal 偏高的情況：
 
 ```text
-==================================================
-TIME: Thu Oct 1 01:38:20 PM UTC 2026
-CPU: 28.4%
+CPU: 43.8%
 
-===== PROCESS SNAPSHOTS BEFORE SPIKE =====
+===== TRIGGER =====
+CPU >= 15%
+STEAL >= 10%
 
---- /home/ploi/perf-logs/cpu-snapshots/<時間戳>.log ---
-...
-
-===== CURRENT TOP PROCESSES =====
-PID      PPID USER    COMMAND       %CPU %MEM ELAPSED
-3476648  ...  root    sshd          43.5  0.2 ...
-3476631  ...  root    sshd          21.1  0.2 ...
-3470811  ...  ploi    php-fpm8.1     0.4  2.3 ...
-43036    ...  mysql   mariadbd       0.1  9.2 ...
+===== CPU BREAKDOWN =====
+user:      3.1%
+system:   15.0%
+iowait:    0.0%
+irq:       0.0%
+softirq:   0.2%
+steal:    25.5%
 ```
 
-這次就是在 CPU 28.4% 時抓到：主要來源是 `sshd`，PHP-FPM 與 MariaDB 的使用率都很低。後續追查見[《SSH 暴力登入與 Fail2ban 防護》]({{ '/ssh-fail2ban/' | relative_url }})。
+同樣的方式，未來若是 `php-fpm8.1`、`mariadbd`、`redis-server` 或其他程序吃 CPU，也都會被記錄下來。SSH 暴力登入造成尖峰的案例，見[《SSH 暴力登入與 Fail2ban 防護》]({{ '/ssh-fail2ban/' | relative_url }})。
 
-同樣的方式，未來若是 `php-fpm8.1`、`mariadbd`、`redis-server` 或其他程序吃 CPU，也都會被記錄下來。
+## 判讀
 
-### 判讀時的注意事項
+### 「CPU」數值包含 steal
 
-`ps` 顯示的 `%CPU` 是該程序「從啟動到現在」的平均使用率，不是當下瞬間的數值。因此請搭配 `ETIME`（已執行時間）一起看：
+腳本算出的整體 CPU 是「100% 減去 idle 與 iowait」，所以 steal 也算在裡面。上面的範例中：
 
-- 剛啟動不久的程序（例如新建立的 SSH 連線），`%CPU` 會特別明顯。
-- 已執行很久的程序（例如 `mariadbd`），即使剛才突然變忙，平均值也不太會立刻拉高。
+```text
+3.1 + 15.0 + 0.2 + 25.5 = 43.8
+```
+
+也就是那 43.8% 裡，有 25.5% 是 steal，並不是主機自己的程式在用。
+
+**steal** 是虛擬機（VM）才有的數值，代表這台 VM 想用 CPU，卻被底層的宿主機排不到、被別的 VM 搶走的時間。也因此，只要 steal 偏高，就算你的程式什麼都沒做，「CPU」也會被墊高、觸發紀錄。
+
+### 看懂 CPU 細項
+
+| 偏高的欄位 | 通常代表 |
+|---|---|
+| `user` | 應用程式在運算（PHP、MySQL 查詢等） |
+| `system` | 核心層的工作（網路、系統呼叫、檔案操作等） |
+| `iowait` | 在等磁碟 I/O |
+| `softirq` / `irq` | 網路封包或硬體中斷處理 |
+| `steal` | 宿主機資源不足，瓶頸在 VM 之外 |
+
+如果 `steal` 很高而 `user` 很低，問題多半出在主機商的宿主機，而不是你的程式，這時往下追查程序沒有意義，應該改去向主機商反映，或評估更換主機。
+
+想手動確認 steal，可以執行：
+
+```bash
+vmstat 1 5
+```
+
+看最右邊附近的 `st` 欄。
+
+### 程序取樣的限制
+
+- `pidstat` 取樣的是 1 秒內的實際 CPU 使用率，比 `ps` 準確。沒有安裝 `pidstat` 而退回 `ps` 時，`%CPU` 是程序「從啟動到現在」的平均值，要搭配 `etime`（已執行時間）一起看。
+- 程序取樣是在「偵測到尖峰之後」才進行，所以持續時間極短的尖峰，取樣時可能已經結束。這是 V3.1 為了降低負擔所做的取捨。
+- `pidstat -p ALL` 會列出所有程序，單筆紀錄可能偏長。
 
 ## 即時查看
 
@@ -262,7 +410,7 @@ PID      PPID USER    COMMAND       %CPU %MEM ELAPSED
 tail -f ~/perf-logs/cpu-over-15.log
 ```
 
-有新的 CPU 異常紀錄時，會直接顯示在畫面上。
+有新的異常紀錄時，會直接顯示在畫面上。
 
 要離開時按 `Ctrl + C`。這只會停止 `tail -f`，**不會停止背景的 Watcher**。
 
@@ -280,7 +428,19 @@ tail -n 100 ~/perf-logs/cpu-over-15.log
 tail -n 200 ~/perf-logs/cpu-over-15.log
 ```
 
-異常紀錄因為包含多筆快照，單筆會比較長，必要時可以多看幾行。
+只想找出有哪些時間點被觸發：
+
+```bash
+grep -E '^TIME:|^STEAL >=|^CPU >=' ~/perf-logs/cpu-over-15.log
+```
+
+### 注意紀錄檔大小
+
+如果 steal 或 CPU 長時間偏高，每 10 秒就會寫一筆較長的紀錄，紀錄檔會成長得很快。建議定期檢查：
+
+```bash
+du -h ~/perf-logs/cpu-over-15.log
+```
 
 ## 停止 Watcher
 
@@ -312,7 +472,7 @@ pgrep -af cpu-watch.sh
 
 這個 Watcher 不只是用來查 SSH 攻擊，它的目的是：
 
-> 當 CPU 異常升高時，自動保留當下，以及尖峰發生前，是哪個程序在使用 CPU。
+> 當 CPU 或 steal 異常升高時，自動保留當下是哪個程序在使用 CPU，以及資源是被自己用掉、還是被宿主機搶走。
 
 可用來追查：
 
@@ -323,10 +483,12 @@ pgrep -af cpu-watch.sh
 - cron 排程
 - 備份程序
 - 系統背景程序
+- 宿主機資源不足（steal）
 - 其他不明程序
 
 建議的使用方式：
 
 1. 平常讓 Watcher 在背景執行。
 2. 客戶反映卡頓時，用 `tail -f ~/perf-logs/cpu-over-15.log` 即時查看。
-3. 依當下與尖峰前 CPU 最高的程序，再往下一層追查。
+3. 先看 `STEAL=`：如果 steal 高，瓶頸在主機商那一層。
+4. 如果 steal 不高，再依 `PROCESS CPU SAMPLE` 裡 CPU 最高的程序往下追查。
