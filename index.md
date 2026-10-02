@@ -9,6 +9,13 @@ title: 維運筆記
 
 <ul class="post-list">
   <li>
+    <a href="{{ '/snap-refresh/' | relative_url }}">
+      <span class="post-date">2026-10-02</span>
+      <span class="post-title">Snap 自動更新時段調整說明</span>
+      <span class="post-desc">把 Snap 自動更新限制在台灣凌晨，避免更新佔用 CPU 影響白天使用。</span>
+    </a>
+  </li>
+  <li>
     <a href="{{ '/ssh-fail2ban/' | relative_url }}">
       <span class="post-date">2026-10-01</span>
       <span class="post-title">SSH 暴力登入與 Fail2ban 防護</span>

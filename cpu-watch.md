@@ -545,7 +545,7 @@ EOF
 另外，腳本裡有幾處是寫死的，換主機時要一併檢查：
 
 - `php-fpm8.1`（`pgrep` 找 master 與 worker 用）與 `PHP_ACCESS_LOG` 的路徑，必須跟 PHP 版本、access log 設定一致。
-- `CURRENT RELATED PROCESSES` 只會列出名稱為 `mariadbd`、`nginx`、`snapd`、`sshd` 且 CPU ≥ 1% 的程序。
+- `CURRENT RELATED PROCESSES` 只會列出名稱為 `mariadbd`、`nginx`、`snapd`、`sshd` 且 CPU ≥ 1% 的程序。其中 `snapd` 的對應案例見[《Snap 自動更新時段調整說明》]({{ '/snap-refresh/' | relative_url }})。
 
 ## 語法檢查與啟動
 
