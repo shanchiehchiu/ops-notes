@@ -50,11 +50,38 @@ PHP worker 的 CPU 不是等整體 CPU 超標才開始算，而是每次取樣�
 
 V3.4 的取捨是：放棄 V3.1 那份「通用的系統狀態快照」，換成能直接回答「**哪個網址**讓 PHP 吃 CPU」。V2、V3.1 的腳本都保留在這個站台的 git 歷史裡。
 
+## 本文的環境與操作順序
+
+### 環境假設
+
+本文以下面這組環境為例，如果你的環境不同，相關的名稱與路徑要一併調整：
+
+| 項目 | 本文的設定 | 換環境時要改的地方 |
+|---|---|---|
+| 作業系統 | Ubuntu / Debian（用 `apt` 安裝套件） | 安裝指令 |
+| 執行帳號 | `ploi`，家目錄 `/home/ploi` | logrotate 的路徑與 `su ploi ploi`、`chown root:ploi`、`pkill` 的路徑 |
+| PHP | PHP 8.1 + PHP-FPM（服務名稱 `php8.1-fpm`） | 腳本裡的 `php-fpm8.1`、`PHP_ACCESS_LOG`、設定檔路徑 |
+| 網站 | Nginx + MariaDB + Laravel | `CURRENT RELATED PROCESSES` 的程序名稱 |
+
+後面的指令都請用 `ploi` 帳號登入後執行，需要管理員權限的已加上 `sudo`。
+
+### 操作順序
+
+照下面的順序做，每一步完成後都有可以確認的結果：
+
+1. 開啟 PHP-FPM access log，重新載入服務。
+2. 調整 access log 權限，讓 `ploi` 讀得到。
+3. （建議）安裝 `pidstat`。
+4. 建立腳本、背景啟動，確認 Watcher 找得到 PHP-FPM。
+5. **跑一次驗證**，親眼看到 Watcher 寫出紀錄（見〈驗證 Watcher 有在運作〉）。
+6. 設定 Logrotate。
+7. 設定開機自動啟動。
+
 ## 事前準備
 
 ### PHP-FPM 現況設定
 
-目前 PHP-FPM 的 pool 設定如下：
+目前這台主機的 PHP-FPM pool 設定如下（僅供對照，不需要修改）：
 
 ```ini
 pm = dynamic
@@ -552,6 +579,14 @@ pgrep -af cpu-watch.sh
 xxxxxxx bash /home/ploi/cpu-watch.sh
 ```
 
+再確認 Watcher 找得到 PHP-FPM 的 master 程序，應該會輸出一個 PID：
+
+```bash
+pgrep -xo php-fpm8.1
+```
+
+如果沒有輸出，代表程序名稱對不上（例如 PHP 版本不是 8.1）。這時 Watcher 不會報錯，只會永遠找不到 PHP worker，`HOT PHP REQUESTS` 會一直是空的，所以務必先確認這一步。可以用 `pgrep -a php-fpm` 查實際的名稱，再回頭修改腳本。
+
 查看啟動紀錄：
 
 ```bash
@@ -569,6 +604,90 @@ tail -20 ~/perf-logs/cpu-over-15.log
 ```text
 ===== CPU WATCH V3.4 ALIVE ... CPU=1.4% STEAL=0.0% =====
 ```
+
+## 驗證 Watcher 有在運作
+
+在安靜的主機上，Watcher 平常只會留下兩種紀錄：啟動時的 `START`，以及每 10 分鐘一次的 `ALIVE`。真正的詳細紀錄只在 CPU 超標時才會出現，所以不要乾等，主動製造一次，確認整條路徑都通。
+
+先開一個視窗追蹤紀錄：
+
+```bash
+tail -f ~/perf-logs/cpu-over-15.log
+```
+
+### 步驟一：確認系統層級的觸發
+
+另開一個視窗，讓每個 CPU 核心各跑一個 15 秒的滿載程序：
+
+```bash
+for i in $(seq "$(nproc)"); do timeout 15 yes > /dev/null & done; wait
+```
+
+幾秒內，追蹤視窗應該出現一筆詳細紀錄：`CPU` 很高、`CPU BREAKDOWN` 的 `user` 偏高，而 `HOT PHP REQUESTS` 在 PHP 沒有在忙的時候會顯示：
+
+```text
+No PHP-FPM worker >= 10% in trigger interval
+```
+
+看到這筆，就代表取樣、門檻判斷、寫入紀錄都正常。因為有 10 秒的冷卻時間，15 秒內大約會有 1～2 筆。
+
+### 步驟二：確認 PHP worker 對照到網址
+
+這一步驗證「PHP worker → PID → request_uri」整條路徑。在網站的 `public` 目錄建立一個暫時的測試檔：
+
+```bash
+nano <網站目錄>/public/cpu-test.php
+```
+
+內容：
+
+```php
+<?php
+$end = microtime(true) + 1.0;
+while (microtime(true) < $end) {
+}
+echo "ok\n";
+```
+
+每個請求會讓 PHP worker 滿載約 1 秒。接著對它發出幾組並行請求（把網址換成你的）：
+
+```bash
+for j in 1 2 3; do (for i in $(seq 8); do curl -s -o /dev/null "https://你的網址/cpu-test.php?n=$j-$i"; done) & done; wait
+```
+
+追蹤視窗應該出現類似這樣的內容：
+
+```text
+===== HOT PHP REQUESTS =====
+PID=<某個 worker 的 PID> CPU=<偏高>%
+<時間> +0000 pid=<同一個 PID> method=GET request_uri=/cpu-test.php?n=... status=200 duration=約 1000ms memory=...
+```
+
+看到 `request_uri=/cpu-test.php` 對上同一個 PID，就代表整條路徑都通了。
+
+**測完務必刪除測試檔**，它是公開的，任何人都能呼叫它來消耗你的 CPU：
+
+```bash
+rm <網站目錄>/public/cpu-test.php
+```
+
+設計上有兩點要注意：
+
+- **請求要短、要多次。** access log 是在請求結束時才寫入，一個還在執行的長請求，在 Watcher 取樣時還沒有紀錄，會讓你誤以為對照失敗（原因見〈怎麼讀 `HOT PHP REQUESTS`〉）。所以用「每個約 1 秒、連續送很多個」的方式。
+- **並行數量要讓整體 CPU 達到 15%。** 每個滿載的 worker 約佔整體 CPU 的「100 ÷ 核心數」%（核心數用 `nproc` 查，原因見〈判讀〉）。上面 3 組並行約等於 300 ÷ 核心數 %，核心數超過 20 就不夠，這時可以增加並行數，或暫時調低 `CPU_THRESHOLD` 來測試。
+
+如果網站設定只允許執行 `index.php`，這個測試檔會回 404，這時改成多次重新整理一個比較慢的頁面。
+
+### 沒有看到預期的紀錄時
+
+| 現象 | 可能原因 | 檢查方式 |
+|---|---|---|
+| 連 `START` 都沒有 | Watcher 沒有在執行，或寫不進 `~/perf-logs` | `pgrep -af cpu-watch.sh`、`ls -ld ~/perf-logs` |
+| 步驟一沒有任何詳細紀錄 | 滿載程序沒有真的跑起來，或 Watcher 已經停了 | 另開視窗看 `top` 的 CPU 是否真的升高、`pgrep -af cpu-watch.sh` |
+| `HOT PHP REQUESTS` 一直是 `No PHP-FPM worker` | Watcher 找不到 PHP-FPM 程序 | `pgrep -xo php-fpm8.1` 要有輸出 |
+| `PHP access log unavailable` | `ploi` 讀不到 access log | `ls -l /var/log/php8.1-fpm-access.log`，並用 `ploi` 身分執行 `tail -1` 該檔案 |
+| `no recent completed request found` | access log 裡沒有該 PID 的紀錄 | `sudo tail -f /var/log/php8.1-fpm-access.log` 看有沒有新的行 |
+| access log 完全沒有新的行 | `access.log` 設定沒生效，或這個網站不在你設定的 pool | `grep -n 'access.log' /etc/php/8.1/fpm/pool.d/*.conf`、`sudo php-fpm8.1 -t`、再 reload |
 
 ## 觸發時的紀錄
 
@@ -666,6 +785,19 @@ vmstat 1 5
 ```
 
 看最右邊附近的 `st` 欄。
+
+### 整體 CPU 與 PHP worker CPU 的基準不同
+
+紀錄裡有兩種 CPU 百分比，算法不一樣：
+
+| 數值 | 基準 |
+|---|---|
+| 整體 CPU（`CPU:`） | 所有核心的平均，100% 代表全部核心都滿載 |
+| PHP worker CPU（`PID=... CPU=...`） | 以單一核心為 100%，一個滿載的 worker 約 100% |
+
+所以在 N 核的主機上，一個滿載的 PHP worker 只會讓整體 CPU 升高約「100 ÷ N」%。例如 4 核主機，一個 worker 跑到 100%，整體 CPU 只升高約 25%。核心數可以用 `nproc` 查。
+
+這也代表兩個門檻的角色不同：**是否觸發紀錄，看的是整體 CPU（`CPU_THRESHOLD`）**；`PHP_CPU_THRESHOLD` 只決定「觸發之後，要把哪些 worker 列出來」。核心數很多的主機，單一 worker 吃滿 CPU 也可能不會讓整體 CPU 達到 15%，這時 Watcher 不會留下紀錄。
 
 ### 怎麼讀 `HOT PHP REQUESTS`
 
@@ -831,6 +963,14 @@ tail -n 200 ~/perf-logs/cpu-over-15.log
 grep -A1 '^PID=' ~/perf-logs/cpu-over-15.log
 ```
 
+確認 Watcher 還活著，最後幾筆 `ALIVE` 的時間應該接近現在，間隔約 10 分鐘：
+
+```bash
+grep ALIVE ~/perf-logs/cpu-over-15.log | tail -3
+```
+
+如果時間停在很久以前，代表 Watcher 已經停了（例如主機重新開機後沒有重新啟動）。紀錄剛輪替完的幾分鐘內，新檔還沒有 `ALIVE` 是正常的。
+
 ## 停止 Watcher
 
 ```bash
@@ -856,6 +996,26 @@ nohup ~/cpu-watch.sh >/dev/null 2>&1 &
 ```bash
 pgrep -af cpu-watch.sh
 ```
+
+## 開機自動啟動
+
+用 `nohup` 啟動的 Watcher，在主機重新開機後不會自動回來，監控會無聲地停掉。建議用 `ploi` 帳號的 crontab 讓它開機時自動啟動：
+
+```bash
+crontab -e
+```
+
+加入這一行：
+
+```text
+@reboot /home/ploi/cpu-watch.sh >/dev/null 2>&1
+```
+
+由 cron 在開機時啟動，不需要 `nohup` 與 `&`。
+
+重新開機後，用 `pgrep -af cpu-watch.sh` 確認 Watcher 在執行，並且在紀錄檔裡看到一行新的 `START`。
+
+設定之後，不要在同一次開機又手動啟動第二份，否則會同時有兩個 Watcher，同樣的紀錄會被寫兩次。
 
 ## 用途
 
