@@ -30,6 +30,8 @@ CPU >= 15%
 同時觀察 MariaDB / Nginx 等相關程序
 ```
 
+PHP worker 的 CPU 不是等整體 CPU 超標才開始算，而是每次取樣都持續透過 `/proc/<pid>/stat` 計算。所以即使只持續一、兩秒的高 CPU request，在觸發時也已經有數值可以對照。
+
 要做到這件事，需要三個東西配合：
 
 1. **PHP-FPM access log**：記錄每個 request 由哪個 PID 處理、真實網址是什麼。
@@ -136,7 +138,7 @@ sudo tail -f /var/log/php8.1-fpm-access.log
 
 ### 讓 Watcher 能讀取 access log
 
-Watcher 以 `ploi` 身分執行，所以要讓 `ploi` 能唯讀這份 log：
+PHP-FPM 建立的 access log，預設權限是 `-rw------- root root`，只有 root 讀得到。Watcher 以 `ploi` 身分執行，讀不到就會顯示 `PHP access log unavailable`，所以要讓 `ploi` 能唯讀這份 log：
 
 ```bash
 sudo chown root:ploi /var/log/php8.1-fpm-access.log
@@ -330,7 +332,7 @@ find_php_request() {
 
     match=$(
         tail -n 1000 "$PHP_ACCESS_LOG" 2>/dev/null \
-        | grep "pid=${pid} " \
+        | grep -a "pid=${pid} " \
         | tail -1
     )
 
@@ -610,6 +612,33 @@ nginx          PID=122495   CPU=13.00%
 
 SSH 暴力登入造成尖峰的案例，見[《SSH 暴力登入與 Fail2ban 防護》]({{ '/ssh-fail2ban/' | relative_url }})。
 
+## 實際案例：`/backend/sales/order`
+
+Watcher 曾經抓到這樣的情況：
+
+| 項目 | 內容 |
+|---|---|
+| 整體 CPU | 36.8% |
+| PHP-FPM worker | PID=4034905，CPU=51.96% |
+| MariaDB | CPU=13% |
+
+同一時間，PHP-FPM access log 裡該 PID 的 request 是 `GET /backend/sales/order`。同一個功能在 access log 裡還出現過下面這些紀錄：
+
+| 來源 | request_uri | duration | memory |
+|---|---|---|---|
+| Watcher 抓到的那次（03:04:40） | `/backend/sales/order` | 1322.854 ms | 38912 KB（約 38 MB） |
+| access log 另見 | `/backend/sales/order?ajax=1...` | 2574.913 ms | 105688 KB（約 103 MB） |
+| access log 另見 | `/backend/sales/order?...` | 2873.612 ms | 103640 KB（約 101 MB） |
+
+目前觀察到的是：`/backend/sales/order` 這類 request 會伴隨較明顯的 PHP CPU 與 MariaDB 負載，執行時間約 1.3～2.9 秒，帶查詢參數的版本記憶體用量也高出不少。
+
+這只是「同時出現」的相關性，還不是根因。Watcher 的工作到「找出是哪個網址」為止，所以接下來不需要再強化 Watcher，而是針對這個反覆出現的高負載網址，往 Laravel 層查：
+
+- Controller 的處理流程
+- SQL query（有沒有慢查詢、重複查詢）
+- DataTable 的查詢
+- 關聯資料的載入成本
+
 ## 判讀
 
 ### 「CPU」數值包含 steal
@@ -657,6 +686,18 @@ PHP-FPM access log 是在 request **結束時**才寫入一行，`%t` 記錄的�
 
 出現 `No PHP-FPM worker >= 10% in trigger interval` 則代表這次尖峰不是 PHP 造成的，往 `CPU BREAKDOWN` 與 `CURRENT RELATED PROCESSES` 找。
 
+### 紀錄裡出現 `binary file matches`
+
+如果 Watcher 的紀錄裡出現：
+
+```text
+grep: (standard input): binary file matches
+```
+
+同時 `request_uri` 又顯示找不到，代表 access log 裡有 `grep` 判定為非文字的內容（例如請求網址帶有無效編碼的位元組，掃描程式的探測請求常會這樣），`grep` 就只回報「有符合」，而不輸出那一行。新版 `grep` 會把這則訊息寫到 stderr，所以 request 查不到；較舊的 `grep` 則會把 `Binary file (standard input) matches` 當成一般輸出，結果這句話會被當成 request 印在紀錄裡。
+
+腳本裡的 `grep -a` 就是為了這件事：強制把 access log 當文字處理，才找得到 request。如果你是從舊版腳本升級，請確認 `find_php_request` 裡用的是 `grep -a`。
+
 ### 其他限制
 
 - `HOT PHP REQUESTS` 的順序是依 PID 任意排列，不是依 CPU 由高到低。
@@ -665,7 +706,7 @@ PHP-FPM access log 是在 request **結束時**才寫入一行，`%t` 記錄的�
 
 ## Logrotate
 
-Watcher 的紀錄與 PHP access log 都會持續成長，兩個都要設定輪替。
+Watcher 的紀錄與 PHP access log 都會持續成長，兩個都要設定輪替。以下這組設定已在實際主機上測試成功。
 
 ### Watcher 紀錄
 
@@ -836,3 +877,4 @@ pgrep -af cpu-watch.sh
 3. 先看 `CPU BREAKDOWN`：如果 `steal` 高，瓶頸在主機商那一層。
 4. 如果 `steal` 不高，看 `HOT PHP REQUESTS` 找出是哪個網址，並比對 `duration` 與時間。
 5. 沒有 PHP worker 偏高時，再看 `CURRENT RELATED PROCESSES` 的 MariaDB、Nginx 往下追查。
+6. 同一個網址反覆出現時，就不再是 Watcher 的問題，改往 Laravel 的 controller、SQL 與資料載入查（見〈實際案例〉）。
