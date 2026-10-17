@@ -25,6 +25,21 @@ Laravel Pulse 是 Laravel 官方的應用程式效能監控套件。它在應用
 
 適用情境：想知道「站台現在卡不卡、卡在哪個路由、哪個 query、cache 命中率多少」，又不想為單一 Laravel 站自建監控系統時，Pulse 是成本最低的選項。
 
+### 跟 Laravel Telescope 差在哪
+
+兩者都是 Laravel 官方套件，都會記錄 request 與 query，但定位不同：
+
+| | Pulse | Telescope |
+| :--- | :--- | :--- |
+| 定位 | 正式環境**監控** | 開發環境**除錯** |
+| 資料粒度 | 聚合統計：次數、最慢、命中率 | 逐筆記錄：每個 request 的 header、payload、response、query、stack trace |
+| 系統層 | 有 CPU、Memory、Storage（靠 `pulse:check` 收集） | 無，只看應用層 |
+| 開銷 | 小，設計給 production 長期跑 | 大，每個 request 都寫多筆記錄 |
+| 敏感資料 | 存統計數字 | 存請求與回應的完整內容（含密碼欄位需自行遮罩） |
+| 官方建議環境 | production | local / dev，不建議上正式機 |
+
+簡單分法：**Telescope 回答「這一筆請求發生了什麼」，Pulse 回答「系統現在健不健康、趨勢往哪走」**。Telescope 上正式機有效能與個資外洩疑慮；兩者定位不重疊，可以併用（Telescope 留開發機，Pulse 上正式機）。
+
 ## 部署步驟
 
 以下以 Ploi 代管、PHP 8.1 的 Laravel 10 站台為例。
