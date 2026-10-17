@@ -11,41 +11,53 @@
   <link rel="stylesheet" href="{{ '/assets/css/style.css' | relative_url }}">
 </head>
 <body>
-  <aside class="toc" id="toc" aria-label="大綱"></aside>
-  <main class="wrap">
-    {% if page.url != '/' %}
-    <a class="back" href="{{ '/' | relative_url }}">← 回到維運筆記</a>
-    {% endif %}
-    {{ content }}
-  </main>
+  <div class="page">
+    <nav class="toc-rail" id="toc" aria-label="大綱"><span class="toc-title">大綱</span><ol></ol></nav>
+    <main class="wrap">
+      {% if page.url != '/' %}
+      <a class="back" href="{{ '/' | relative_url }}">← 回到維運筆記</a>
+      {% endif %}
+      {{ content }}
+    </main>
+  </div>
   <footer class="wrap foot">
     <a href="https://github.com/shanchiehchiu/ops-notes">在 GitHub 查看原始碼</a>
   </footer>
   <script>
+  // 大綱：抓 h2/h3 產生左側欄（寬螢幕）與頁首收合清單（窄螢幕），附捲動高亮
   (function () {
-    var toc = document.getElementById('toc');
-    var heads = document.querySelectorAll('main h2, main h3');
-    if (heads.length < 3) { toc.remove(); return; }
+    var main = document.querySelector('main');
+    var rail = document.getElementById('toc');
+    var heads = Array.prototype.slice.call(main.querySelectorAll('h2, h3'));
+    if (heads.length < 3) { return; }
+    document.body.classList.add('has-toc');
 
-    var title = document.createElement('div');
-    title.className = 'toc-title';
-    title.textContent = '大綱';
-    toc.appendChild(title);
+    // 窄螢幕用的頁首收合目錄，插在 h1/byline 之後
+    var top = document.createElement('details');
+    top.className = 'toc-top';
+    var sum = document.createElement('summary');
+    sum.textContent = '大綱';
+    top.appendChild(sum);
+    var topList = document.createElement('ol');
+    top.appendChild(topList);
+    var anchor = main.querySelector('.byline') || main.querySelector('h1') || main.firstChild;
+    anchor.parentNode.insertBefore(top, anchor.nextSibling);
 
-    var ul = document.createElement('ul');
+    var railList = rail.querySelector('ol');
     heads.forEach(function (h, i) {
       if (!h.id) { h.id = 'sec-' + i; }
-      var li = document.createElement('li');
-      if (h.tagName === 'H3') { li.className = 'toc-sub'; }
-      var a = document.createElement('a');
-      a.href = '#' + h.id;
-      a.textContent = h.textContent;
-      li.appendChild(a);
-      ul.appendChild(li);
+      [railList, topList].forEach(function (list) {
+        var li = document.createElement('li');
+        if (h.tagName === 'H3') { li.className = 'toc-sub'; }
+        var a = document.createElement('a');
+        a.href = '#' + h.id;
+        a.textContent = h.textContent;
+        li.appendChild(a);
+        list.appendChild(li);
+      });
     });
-    toc.appendChild(ul);
 
-    var links = Array.prototype.slice.call(ul.querySelectorAll('a'));
+    var links = Array.prototype.slice.call(railList.querySelectorAll('a'));
     var current = null;
     function spy() {
       var active = heads[0];

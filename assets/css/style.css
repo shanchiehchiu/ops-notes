@@ -188,35 +188,61 @@ td code { white-space: nowrap; }
 
 ::selection { background: var(--green); color: #000; }
 
-/* 左側大綱：寬螢幕顯示，窄螢幕隱藏 */
-.toc { display: none; }
+/* 大綱：窄螢幕用頁首收合清單，寬螢幕用左側 sticky 欄（參考 erp-case-study 的 grid 做法） */
+.toc-rail { display: none; }
 
-@media (min-width: 1280px) {
-  .toc {
+.toc-top {
+  margin: 0 0 1.5em;
+  padding: 10px 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 15px;
+}
+.toc-top summary { cursor: pointer; font-weight: 700; color: var(--cyan); }
+.toc-top ol { margin: 10px 0 4px; padding-left: 1.4rem; }
+.toc-top li.toc-sub { font-size: 13.5px; }
+.toc-top li.toc-sub a { color: var(--muted); }
+.toc-top a { border-bottom: 0; }
+
+@media (min-width: 1080px) {
+  body.has-toc .page {
+    display: grid;
+    grid-template-columns: 210px minmax(0, 820px);
+    gap: 2rem;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 20px;
+  }
+  body.has-toc main.wrap { max-width: none; margin: 0; padding-left: 0; padding-right: 0; }
+  body.has-toc .toc-top { display: none; }
+  body.has-toc .toc-rail {
     display: block;
-    position: fixed;
-    top: 56px;
-    left: 24px;
-    width: 220px;
-    max-height: calc(100vh - 90px);
+    position: sticky;
+    top: 0;
+    align-self: start;
+    max-height: 100vh;
     overflow-y: auto;
-    padding-left: 14px;
-    border-left: 2px solid var(--border);
+    padding: 56px 0 48px;
     font-size: 14px;
     line-height: 1.6;
   }
-  .toc-title {
-    margin-bottom: 10px;
+  .toc-rail .toc-title {
     font-family: var(--mono);
     font-size: 12px;
     letter-spacing: 0.15em;
     color: var(--muted);
     text-transform: uppercase;
   }
-  .toc ul { list-style: none; margin: 0; padding: 0; }
-  .toc li { margin: 0; }
-  .toc li.toc-sub { padding-left: 14px; font-size: 13px; }
-  .toc a {
+  .toc-rail ol {
+    list-style: none;
+    margin: 10px 0 0;
+    padding-left: 12px;
+    border-left: 2px solid var(--border);
+  }
+  .toc-rail li { margin: 0; }
+  .toc-rail li.toc-sub { padding-left: 14px; font-size: 13px; }
+  .toc-rail a {
     display: block;
     padding: 3px 0;
     color: var(--muted);
@@ -225,8 +251,8 @@ td code { white-space: nowrap; }
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .toc a:hover { color: var(--cyan); }
-  .toc a.active { color: var(--green); }
+  .toc-rail a:hover { color: var(--cyan); }
+  .toc-rail a.active { color: var(--green); }
 }
 
 @media (max-width: 600px) {
