@@ -8,24 +8,44 @@ permalink: /laravel-pulse/
 
 <p class="byline">2026-10-17</p>
 
-## 背景
+## Laravel Pulse 是什麼
 
-一套 Laravel 10 應用（Ploi 代管、PHP 8.1）導入官方 Laravel Pulse 做效能監控，取代自建儀表板。`/pulse` 沿用後台的登入 session 與權限系統，不對外開放。
+Laravel Pulse 是 Laravel 官方的應用程式效能監控套件。它在應用內收集數據、存進自己的資料表，內建一個即時儀表板，掛在 `/pulse` 路徑。
 
-部署後遇到一個很隱密的問題：後台管理員開 `/pulse` 一律 403，gate 裡面放的 debug log 也完全沒有輸出。追查後發現是 Laravel Gate 的「訪客跳過機制」在多 guard 架構下的坑，本文記錄部署方式、權限設計與排查過程。
+儀表板內建的監控卡片：
 
-## 名詞
+- **Servers**：CPU、Memory、Storage（多台主機會分台列出）
+- **Application Usage**：最活躍的使用者與路由
+- **Slow Requests / Slow Queries / Slow Jobs / Slow Outgoing Requests**：超過門檻（預設 1,000ms）的項目，含最慢時間與次數
+- **Queues**：各 queue 的積壓、處理中、失敗數
+- **Cache**：命中率與各 key 的 hit/miss
+- **Exceptions**：例外類型與發生次數
 
-- **Daemon**：Ploi 管理的常駐程序，停止後 Ploi 會重新啟動。
-- **guard**：Laravel 的認證通道。本例前台用預設 `web` guard，後台用 `backend` guard。
-- **訪客（guest）**：在當前 guard 下沒有登入使用者的請求。
-- **超級管理員**：屬於超管群組清單的後台帳號。
+資料收集靠一支常駐指令 `php artisan pulse:check`；沒跑這支，儀表板開得出來但所有數據都不會更新。過期資料由 Pulse 依 `config/pulse.php` 的 `storage` 設定自行清理。
 
-## 架構與權限
+適用情境：想知道「站台現在卡不卡、卡在哪個路由、哪個 query、cache 命中率多少」，又不想為單一 Laravel 站自建監控系統時，Pulse 是成本最低的選項。
 
-Pulse 路由掛 `web` middleware，經過 `Laravel\Pulse\Http\Middleware\Authorize` 檢查 `viewPulse` gate。
+## 部署步驟
 
-權限在 `app/Providers/AuthServiceProvider.php` 定義。重點：Pulse 用預設 `web` guard 解析使用者，但後台登在 `backend` guard，所以 gate 必須**自己解析 backend guard**，不能依賴傳入的 `$user`。
+以下以 Ploi 代管、PHP 8.1 的 Laravel 10 站台為例。
+
+### 1. 安裝套件
+
+```bash
+composer require laravel/pulse
+php artisan vendor:publish --provider="Laravel\Pulse\PulseServiceProvider"
+php artisan migrate
+```
+
+`vendor:publish` 會產生 `config/pulse.php` 與 dashboard view。Pulse 需要 PHP `^8.1`。
+
+注意 PHP 版本對齊：若本機 PHP 比正式機新，`composer.json` 的 `config.platform.php` 要釘在正式機版本（例如 `8.1.2`），讓 lock 檔按正式環境解析相依；正式機一律 `composer install` 吃 lock，不跑 `composer update`。
+
+### 2. 設定存取權限
+
+Pulse 預設只允許本地環境存取，正式環境必須定義 `viewPulse` gate，否則 `/pulse` 對外開放或一律 403。
+
+在 `app/Providers/AuthServiceProvider.php` 定義：
 
 ```php
 Gate::define('viewPulse', function (?\Illuminate\Contracts\Auth\Authenticatable $user = null) {
@@ -41,37 +61,30 @@ Gate::define('viewPulse', function (?\Illuminate\Contracts\Auth\Authenticatable 
 });
 ```
 
-放行規則：
+這段假設後台走獨立的 `backend` guard、模型為 `AdminUser`，放行規則：超管群組直接放行，其他帳號需 `viewPulse` 權限或覆寫，停用帳號與訪客一律 403。
 
-- 超管群組直接放行
-- 其他帳號需 `viewPulse` 權限或權限覆寫
-- 停用帳號與訪客一律 403
+兩個關鍵細節：
 
-兩個細節：
+1. **第一個參數必須是 `?Authenticatable $user = null`**——多 guard 架構下寫錯這裡會一律 403，根因見文末踩坑紀錄。
+2. **`(int) $admin->status`**：欄位沒有 cast 時 MySQL 回字串 `"1"`，嚴格比對 `=== 1` 會失敗。
 
-1. **第一個參數必須是 `?Authenticatable $user = null`**，這是本次 403 的根因修正，見文末附錄。
-2. **`(int) $admin->status`**：欄位沒有 cast 時 MySQL 回字串 `"1"`，`=== 1` 嚴格比對會失敗。
+若是單 guard 的標準應用，官方文件的寫法 `function (User $user)` 即可；自行解析其他 guard 才需要 nullable 參數。
 
-## 部署步驟
-
-在專案根目錄依序執行：
+### 3. 部署到正式機
 
 ```bash
-# 1. 安裝相依（正式機一律 install，吃 lock 檔）
 composer install --no-dev --optimize-autoloader --no-interaction
-
-# 2. 建立 pulse_* 資料表
 php artisan migrate --force
-
-# 3. 清快取
 php artisan config:clear
 php artisan route:clear
-
-# 4. 重載 PHP-FPM（避免 OPcache 咬舊版）
 sudo systemctl reload php8.1-fpm
 ```
 
-再到 Ploi → Site → Daemons 新增：
+deploy script 若有 `config:cache` / `route:cache`，必須在 Pulse 裝好後重建，否則舊路由快取裡沒有 `/pulse`。
+
+### 4. 建立資料收集 Daemon
+
+Ploi → Site → Daemons → Add：
 
 | 欄位 | 值 |
 | :--- | :--- |
@@ -80,50 +93,37 @@ sudo systemctl reload php8.1-fpm
 | User | `ploi` |
 | Processes | `1` |
 
-沒有這支 Daemon，儀表板開得出來但所有數據都不會更新。
+非 Ploi 環境用 Supervisor 或 systemd 跑同一支指令即可。
 
-另外注意：deploy script 若有 `config:cache` / `route:cache`，必須在 Pulse 裝好後重建，否則舊的路由快取裡沒有 `/pulse`。
-
-## 驗收
+### 5. 驗收
 
 - 未登入開 `/pulse` → 403
-- `/backend` 登入超管 → `/pulse` → 200，儀表板正常渲染
+- 後台登入超管 → `/pulse` → 200
 - 等 1–2 分鐘，Servers 卡片出現 CPU、Memory、Storage 數值
 - `pgrep -af "pulse:check"` 有一個程序存活
 
-## 日常維運
+## 日常維運與排查速查
 
 - Daemon 健康：`pgrep -af "pulse:check"`，或在 Ploi Daemons 頁面看 log
 - 每次部署後例行：`composer install`、`config:clear`、`route:clear`、`reload php8.1-fpm`
-- Pulse 依 `config/pulse.php` 的 `storage` 設定自行清理過期資料，不用手動清表
 - `Slow Requests` 門檻預設 1,000ms；清快取後的冷啟動請求上榜屬正常，同一路由持續累積才需要排查
-
-## 故障排查
-
-站台通常 `access_log off`，請求記錄查不到，改用回應 header 判斷請求走到哪一層：
-
-```bash
-curl -sI https://<站台網域>/pulse
-```
-
-- 回應帶 `laravel_session`（或自訂的 session cookie）與 `XSRF-TOKEN` → 請求已到 Laravel，問題在 app 層
-- 純 403、無 cookie → 沒進 PHP，查 nginx 與 Ploi 自訂片段（`/etc/nginx/ploi/<站台>/after/*`）
-- `server: cloudflare` 只代表經過 CF，不是 CF 擋的證據
 
 | 症狀 | 處理 |
 | :--- | :--- |
-| 超管也一律 403 | 檢查 gate 第一參數是否為 `?Authenticatable $user = null`，見附錄 |
+| 超管也一律 403 | 檢查 gate 第一參數是否為 `?Authenticatable $user = null`，見下節 |
 | 帳號對但 403 | tinker 查 `admin_group_id` 與 `status`；`status` 非 1 是停用，群組不符補 `viewPulse` 權限 |
 | `/pulse` 回 404 | `route:list --path=pulse`；路由不在就 `route:clear` 後重建快取 |
 | 改完程式碼沒反應 | `systemctl reload php8.1-fpm`，OPcache 咬舊版 |
 | 儀表板全無數據 | `pgrep -af "pulse:check"`，Daemon 沒跑就重建 |
 | debug log 印不出來 | `.env` 的 `LOG_LEVEL`；`error` 級別會濾掉 `info`/`warning`，臨時 debug 要用 `Log::error` |
 
-## 附錄：一律 403 的根因
+站台 `access_log off` 時，用回應 header 判斷請求走到哪一層：`curl -sI` 回應帶 session cookie 與 `XSRF-TOKEN` → 已到 Laravel，問題在 app 層；無 cookie → 沒進 PHP，往 nginx 查。
+
+## 踩坑紀錄：一律 403 的根因
 
 ### 症狀
 
-`/pulse` 一律 403。超管帳號正確、程式確定部署、FPM 與快取都清過，gate 內連 `Log::error` 都沒有輸出。
+部署後 `/pulse` 一律 403。超管帳號正確、程式確定部署、FPM 與快取都清過，gate 內連 `Log::error` 都沒有輸出。
 
 ### 根因
 
