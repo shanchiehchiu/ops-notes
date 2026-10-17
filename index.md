@@ -9,6 +9,13 @@ title: 維運筆記
 
 <ul class="post-list">
   <li>
+    <a href="{{ '/laravel-pulse/' | relative_url }}">
+      <span class="post-date">2026-10-17</span>
+      <span class="post-title">Laravel Pulse 導入與多 Guard 403 排查</span>
+      <span class="post-desc">導入官方 Pulse 監控，並追查多 guard 架構下 gate 被訪客機制跳過、一律 403 的根因。</span>
+    </a>
+  </li>
+  <li>
     <a href="{{ '/snap-refresh/' | relative_url }}">
       <span class="post-date">2026-10-02</span>
       <span class="post-title">Snap 自動更新時段調整說明</span>
