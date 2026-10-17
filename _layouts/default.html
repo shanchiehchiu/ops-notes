@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="{{ '/assets/css/style.css' | relative_url }}">
 </head>
 <body>
+  <aside class="toc" id="toc" aria-label="大綱"></aside>
   <main class="wrap">
     {% if page.url != '/' %}
     <a class="back" href="{{ '/' | relative_url }}">← 回到維運筆記</a>
@@ -20,5 +21,46 @@
   <footer class="wrap foot">
     <a href="https://github.com/shanchiehchiu/ops-notes">在 GitHub 查看原始碼</a>
   </footer>
+  <script>
+  (function () {
+    var toc = document.getElementById('toc');
+    var heads = document.querySelectorAll('main h2, main h3');
+    if (heads.length < 3) { toc.remove(); return; }
+
+    var title = document.createElement('div');
+    title.className = 'toc-title';
+    title.textContent = '大綱';
+    toc.appendChild(title);
+
+    var ul = document.createElement('ul');
+    heads.forEach(function (h, i) {
+      if (!h.id) { h.id = 'sec-' + i; }
+      var li = document.createElement('li');
+      if (h.tagName === 'H3') { li.className = 'toc-sub'; }
+      var a = document.createElement('a');
+      a.href = '#' + h.id;
+      a.textContent = h.textContent;
+      li.appendChild(a);
+      ul.appendChild(li);
+    });
+    toc.appendChild(ul);
+
+    var links = Array.prototype.slice.call(ul.querySelectorAll('a'));
+    var current = null;
+    function spy() {
+      var active = heads[0];
+      heads.forEach(function (h) {
+        if (h.getBoundingClientRect().top <= 100) { active = h; }
+      });
+      if (active === current) { return; }
+      current = active;
+      links.forEach(function (a) {
+        a.classList.toggle('active', a.getAttribute('href') === '#' + active.id);
+      });
+    }
+    document.addEventListener('scroll', spy, { passive: true });
+    spy();
+  })();
+  </script>
 </body>
 </html>

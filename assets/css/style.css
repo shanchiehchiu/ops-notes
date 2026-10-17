@@ -188,6 +188,47 @@ td code { white-space: nowrap; }
 
 ::selection { background: var(--green); color: #000; }
 
+/* 左側大綱：寬螢幕顯示，窄螢幕隱藏 */
+.toc { display: none; }
+
+@media (min-width: 1280px) {
+  .toc {
+    display: block;
+    position: fixed;
+    top: 56px;
+    left: 24px;
+    width: 220px;
+    max-height: calc(100vh - 90px);
+    overflow-y: auto;
+    padding-left: 14px;
+    border-left: 2px solid var(--border);
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  .toc-title {
+    margin-bottom: 10px;
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.15em;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+  .toc ul { list-style: none; margin: 0; padding: 0; }
+  .toc li { margin: 0; }
+  .toc li.toc-sub { padding-left: 14px; font-size: 13px; }
+  .toc a {
+    display: block;
+    padding: 3px 0;
+    color: var(--muted);
+    border-bottom: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .toc a:hover { color: var(--cyan); }
+  .toc a.active { color: var(--green); }
+}
+
 @media (max-width: 600px) {
   body { font-size: 16px; }
   h1 { font-size: 1.6rem; }
