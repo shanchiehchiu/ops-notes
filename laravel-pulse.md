@@ -38,6 +38,15 @@ Laravel Pulse 是 Laravel 官方的應用程式效能監控套件。它在應用
 | 敏感資料 | 存統計數字 | 存請求與回應的完整內容（含密碼欄位需自行遮罩） |
 | 官方建議環境 | production | local / dev，不建議上正式機 |
 
+環境需求（以 2026-10 最新版為準，Pulse v1.8 / Telescope v5.26）：
+
+| | Pulse | Telescope |
+| :--- | :--- | :--- |
+| PHP | `^8.1` | `^8.0` |
+| Laravel | `^10.48.4` 起 | `^8.37` 起 |
+
+Telescope 套件本身 PHP 下限其實是 8.0，不是 8.2；會有 8.2 的印象，是因為 Laravel 11/12 本身需要 PHP `^8.2`，在新版 Laravel 上實際地板就跟著是 8.2。在 Laravel 10 + PHP 8.1 的環境兩者都能跑。
+
 簡單分法：**Telescope 回答「這一筆請求發生了什麼」，Pulse 回答「系統現在健不健康、趨勢往哪走」**。Telescope 上正式機有效能與個資外洩疑慮；兩者定位不重疊，可以併用（Telescope 留開發機，Pulse 上正式機）。
 
 ## 部署步驟
