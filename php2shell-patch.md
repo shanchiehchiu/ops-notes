@@ -59,16 +59,24 @@ PHP 官方提到的其他緩解措施（同樣不能取代更新）：
    ```
 
    應看到 `8.1.2-1ubuntu2.28`，來源為 `security.ubuntu.com/ubuntu jammy-security`。`Candidate` 可能顯示 Ondřej PPA 的 `8.1.34`，此時不得執行 `apt upgrade`。
-4. 模擬安裝，不修改系統：
+4. 模擬更新，不修改系統。自動找出已安裝、版本為 `.27` 的 PHP 8.1 套件，並指定 `.28`：
 
    ```bash
-   sudo apt-get -s install \
-     php8.1-fpm=8.1.2-1ubuntu2.28 \
-     php8.1-common=8.1.2-1ubuntu2.28
+   dpkg-query -W -f='${binary:Package} ${Version}\n' 'php8.1*' \
+     | awk '$2 == "8.1.2-1ubuntu2.27" {print $1 "=8.1.2-1ubuntu2.28"}' \
+     | xargs -r sudo apt-get -s install
    ```
 
-   確認沒有相依衝突、`Remv` 或非預期的 PPA 套件。
-5. 正式安裝。PHP 核心及標準擴充套件可固定版本安裝；Redis、Memcached 等另外打包的擴充套件不得強制套用 `.28`。
+   模擬結果：20 個套件可從 `.27` 更新至 `.28`，0 個新增、0 個移除，沒有相依性錯誤，且全部來自 Ubuntu 官方套件，未切換 Ondřej PPA。
+5. 正式更新。請在維護時段執行，更新過程可能重啟 PHP-FPM：
+
+   ```bash
+   dpkg-query -W -f='${binary:Package} ${Version}\n' 'php8.1*' \
+     | awk '$2 == "8.1.2-1ubuntu2.27" {print $1 "=8.1.2-1ubuntu2.28"}' \
+     | xargs -r sudo apt-get install
+   ```
+
+   不要手動列出 `php8.1-fpm` 與 `php8.1-common` 兩個套件。主機實際安裝的套件較多，只列兩個會造成相依性錯誤。
 6. 測試設定並重啟 PHP-FPM：
 
    ```bash
@@ -82,12 +90,19 @@ PHP 官方提到的其他緩解措施（同樣不能取代更新）：
 
 ```bash
 php -v
-dpkg-query -W php8.1-fpm php8.1-common php8.1-opcache
+dpkg-query -W -f='${binary:Package} ${Version}\n' 'php8.1*' \
+  | awk '$2 == "8.1.2-1ubuntu2.27" {print}'
+dpkg-query -W php8.1-fpm php8.1-cli php8.1-common php8.1-opcache
 systemctl is-active php8.1-fpm
 php-fpm8.1 -i | grep session.upload_progress.enabled
 ```
 
-預期結果：套件版本為 `8.1.2-1ubuntu2.28`，服務為 `active`，`session.upload_progress.enabled => Off => Off`。
+預期結果：
+
+- 第二條指令沒有輸出，代表原本 `.27` 的套件已全部更新。
+- `php8.1-fpm`、`php8.1-cli`、`php8.1-common`、`php8.1-opcache` 的版本為 `8.1.2-1ubuntu2.28`。
+- 服務為 `active`。
+- `session.upload_progress.enabled => Off => Off`。
 
 ## 二、PHP 8.2 建議更新方式
 
@@ -123,23 +138,15 @@ PHP 8.2 的官方修補版本為 `8.2.35`。USN-8948-1 未列出 php8.2，因此
 
    應看到來源為 `ppa.launchpadcontent.net/ondrej/php/ubuntu jammy/main`。
 
-4. 模擬更新已安裝的套件，不修改系統：
+4. 列出需要更新的 PHP 8.2 核心套件（唯讀）：
 
    ```bash
-   sudo apt-get -s install \
-     $(dpkg-query -W -f='${binary:Package}\n' 'php8.2*' \
-       | sed 's/$/=8.2.35-1+ubuntu22.04.1+deb.sury.org+1/')
+   dpkg-query -W -f='${binary:Package} ${Version}\n' 'php8.2*' \
+     | awk '$2 ~ /^8\.2\./ && $2 !~ /^8\.2\.35-/ {print $1, $2}'
    ```
 
-   確認沒有相依衝突，且沒有移除 `php8.1-*` 套件。
-
-5. 正式更新：
-
-   ```bash
-   sudo apt-get install \
-     $(dpkg-query -W -f='${binary:Package}\n' 'php8.2*' \
-       | sed 's/$/=8.2.35-1+ubuntu22.04.1+deb.sury.org+1/')
-   ```
+   此清單只包含實際已安裝、版本低於 `8.2.35` 的套件。不得直接把 `php8.2*` 全部指定為同一版本，因為可能包含未安裝的虛擬套件，以及版本編號不同的 Redis、Memcached 等擴充套件。
+5. 依第 4 步的清單，模擬並正式更新。正式指令待第 4 步結果確認後再定稿，更新前必須確認模擬結果沒有移除 `php8.1-*` 套件，且沒有切換來源。
 
 6. 測試設定並重啟 PHP 8.2-FPM。只有在 `php8.2-fpm` 已安裝且網站 pool 使用 8.2 時才執行：
 
