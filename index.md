@@ -9,6 +9,13 @@ title: 維運筆記
 
 <ul class="post-list">
   <li>
+    <a href="{{ '/php2shell-patch/' | relative_url }}">
+      <span class="post-date">2026-10-22</span>
+      <span class="post-title">PHP2Shell 漏洞修補與 Ubuntu 自動更新確認</span>
+      <span class="post-desc">確認 Ubuntu 自動更新機制，並完成 PHP 修補版本的安裝與暫時防護。</span>
+    </a>
+  </li>
+  <li>
     <a href="{{ '/laravel-pulse/' | relative_url }}">
       <span class="post-date">2026-10-17</span>
       <span class="post-title">Laravel Pulse 導入與多 Guard 403 排查</span>
