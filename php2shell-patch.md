@@ -91,17 +91,73 @@ php-fpm8.1 -i | grep session.upload_progress.enabled
 
 ## 二、PHP 8.2 建議更新方式
 
-PHP 8.2 的官方修補版本為 `8.2.35`。USN-8948-1 未列出 php8.2，因此不能假設 Ubuntu 安全源會自動提供 8.2 的修補。
+PHP 8.2 的官方修補版本為 `8.2.35`。USN-8948-1 未列出 php8.2，因此不能假設 Ubuntu 安全源會提供 8.2 的修補。
 
-1. 確認系統版本：`lsb_release -a`
-2. 確認套件來源：`apt-cache policy php8.2-fpm`
-3. 依來源處理：
-   - Ubuntu 官方套件（`*-security`）：依 USN 版本更新，並確認自動更新政策是否涵蓋。
-   - Ondřej PPA：PPA 不一定納入自動更新，需確認已發布 `8.2.35` 等修補版本，再以 APT 手動更新。
-   - Docker 或自行編譯：依原本的部署方式更新，不必直接下載 PHP 原始碼。
-4. 依第一節的方式模擬安裝、正式安裝、測試並重啟 PHP worker，最後驗證版本。
+**本主機現況**
 
-在更新完成前，先套用上方的 `session.upload_progress.enabled = 0`。
+- 主機的 `php8.2-fpm` 未安裝（`Installed: (none)`）。目前運作的是 PHP 8.1，本節不影響現有服務。
+- 若之後要使用 PHP 8.2，`Candidate` 為 Ondřej PPA 的 `8.2.35-1+ubuntu22.04.1+deb.sury.org+1`，需安裝，不是更新。
+
+**步驟**
+
+1. 確認系統版本（唯讀）：
+
+   ```bash
+   lsb_release -a
+   ```
+
+2. 確認沒有已安裝的 PHP 8.2 套件（唯讀）：
+
+   ```bash
+   dpkg-query -W 'php8.2*'
+   ```
+
+   無輸出代表未安裝。若已安裝，依既有版本逐項確認是否為 `8.2.35`。
+
+3. 確認套件來源（唯讀）：
+
+   ```bash
+   apt-cache policy php8.2-fpm
+   ```
+
+   應看到來源為 `ppa.launchpadcontent.net/ondrej/php/ubuntu jammy/main`。
+
+4. 模擬安裝，不修改系統：
+
+   ```bash
+   sudo apt-get -s install php8.2-fpm=8.2.35-1+ubuntu22.04.1+deb.sury.org+1
+   ```
+
+   確認沒有相依衝突，且沒有移除 `php8.1-*` 套件。
+
+5. 正式安裝：
+
+   ```bash
+   sudo apt-get install php8.2-fpm=8.2.35-1+ubuntu22.04.1+deb.sury.org+1
+   ```
+
+6. 測試設定並重啟 PHP 8.2-FPM。只有在網站 pool 已切換到 8.2 時才執行重啟：
+
+   ```bash
+   sudo php-fpm8.2 -t
+   sudo systemctl restart php8.2-fpm
+   ```
+
+7. 驗證：
+
+   ```bash
+   php-fpm8.2 -v
+   systemctl is-active php8.2-fpm
+   ```
+
+   預期結果：版本為 `8.2.35`，服務為 `active`。
+
+在安裝或切換完成前，先套用上方的 `session.upload_progress.enabled = 0`。
+
+**注意**
+
+- 安裝 PHP 8.2 不會自動讓網站改用 8.2。網站仍由 Nginx 指向的 PHP-FPM socket 決定。
+- 若 PPA 未加入，需先加入 `ondrej/php` PPA，此步驟會改變套件來源，應先與維運確認。
 
 ## 結論
 
